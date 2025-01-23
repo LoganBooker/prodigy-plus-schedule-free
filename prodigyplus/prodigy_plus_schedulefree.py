@@ -133,6 +133,12 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
             weight direction, as described in "Grokking at the Edge of Numerical Stability" (https://arxiv.org/pdf/2501.04697).
             Can help prevent overfitting and improve generalisation.
             (default: False)
+        galore_rank_denom (int):
+            Highly experimental. Stores schedule-free's underlying momentum (z) as a low-rank projection using a modified version
+            of GaLore (https://arxiv.org/abs/2403.03507). Reduces memory usage. This value determines the denominator used to 
+            reduce the size of the smallest parameter dimension. Values of 2 or 4 are recommended, anything larger may 
+            significantly degrade optimiser quality. Disabled if set to None.
+            (default: None)
         stochastic_rounding (boolean):
             Use stochastic rounding for bfloat16 weights (https://github.com/pytorch/pytorch/issues/120376). Brings
             bfloat16 training performance close to that of float32.
@@ -158,6 +164,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                  use_grams=False,
                  use_adopt=False,
                  use_orthograd=False,
+                 galore_rank_denom=None,
                  stochastic_rounding=True):
 
         super().__init__(params=params, lr=lr, betas=betas, beta3=beta3,
@@ -168,7 +175,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                          split_groups_mean=split_groups_mean, factored=factored, factored_fp32=factored_fp32,
                          fused_back_pass=fused_back_pass, use_stableadamw=use_stableadamw,
                          use_muon_pp=use_muon_pp, use_cautious=use_cautious, use_grams=use_grams, 
-                         use_adopt=use_adopt, use_orthograd=use_orthograd, 
+                         use_adopt=use_adopt, use_orthograd=use_orthograd, galore_rank_denom=galore_rank_denom,
                          stochastic_rounding=stochastic_rounding)
 
     @torch.no_grad()
@@ -181,6 +188,10 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                 z = self.state[p].get('z')
                 if z is not None:
                     # Set p to x
+                    projector = self.state[p].get('projector')
+                    if projector is not None:
+                        z = projector.project_back(z)
+
                     p.lerp_(end=z.to(device=p.device), weight=1 - 1 / beta1)
             group['train_mode'] = False
 
@@ -194,6 +205,10 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                 z = self.state[p].get('z')
                 if z is not None:
                     # Set p to y
+                    projector = self.state[p].get('projector')
+                    if projector is not None:
+                        z = projector.project_back(z)
+
                     p.lerp_(end=z.to(device=p.device), weight=1 - beta1)
             group['train_mode'] = True
 
@@ -202,8 +217,14 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
         state, needs_init = self.initialise_state_internal(p, group)
 
         if needs_init:
-            state['z'] = p.detach().clone(memory_format=torch.preserve_format)
-        
+            if group['galore_rank_denom'] is not None:
+                # If weights are zero (LoRA perhaps), use more frequent proj updates.
+                init_matrix, proj_grap = (None, 200) if p.any() > 0 else (p.grad, 50)
+                state["projector"] = GaLoreProjector(group['galore_rank_denom'], update_proj_gap=proj_grap)
+                state['z'] = state["projector"].project(p.detach(), 0, init_matrix).to(p.dtype)
+            else:
+                state['z'] = p.detach().clone(memory_format=torch.preserve_format)
+
         return state
 
     @torch.no_grad()
@@ -216,6 +237,10 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
         weight = dlr ** 2
         weight_sum = group['weight_sum'] + weight
         ckp1 = weight / weight_sum if weight_sum else 0
+
+        # Prevent initial updates entirely replacing y with low-rank z.
+        if group['galore_rank_denom'] is not None and group['k'] <= 10:
+            ckp1 = 0
 
         xy_step = 1 - beta1 * (1 - ckp1)
 
@@ -302,10 +327,18 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                     update.mul_(1 / rms)
 
                 z_state = state['z']
+
+                projector = state.get('projector', None)
+                if projector is not None:
+                    z_state = projector.project_back(z_state)
+
                 self.update_prodigy(state, group, p.grad, z_state)
 
                 y, z = (p.float(), z_state.float()) if stochastic else (p, z_state)
                 weight_sum = self.update_params(y, z, update, group)
+
+                if projector is not None:
+                    z_state, z = state['z'], projector.project(z, k, p.grad)
 
                 self.smart_copy(p, y, stochastic, True)
                 self.smart_copy(z_state, z, stochastic, True)
@@ -314,3 +347,114 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
 
         group['running_weight_sum'] = weight_sum
         self.on_end_step()
+
+# Modified from: https://github.com/jiaweizzhao/GaLore/blob/master/galore_torch/galore_projector.py
+# Includes https://github.com/jiaweizzhao/GaLore/pull/65 to support n-dim tensors.
+class GaLoreProjector:
+    def __init__(self, rank, update_proj_gap=50, scale=1.0):
+        self.rank = rank
+        self.update_proj_gap = update_proj_gap
+        self.scale = scale
+        self.ortho_matrix = None
+        self._original_shape = None
+
+        # Adaptive Update Subspace
+        # From: https://github.com/VITA-Group/Q-GaLore/blob/main/q_galore_torch/q_galore_projector.py
+        self.past_ortho_vector = None
+        self.queue_size = 5
+        self.queue = []
+        self.cos_threshold = 0.4
+        self.gamma_proj = 2
+        self.svd_count = 0
+
+    @torch.no_grad()
+    def cast_ortho_matrix(self, grad):
+        return self.ortho_matrix.to(dtype=grad.dtype)
+    
+    def get_residual(self, full_rank_grad):
+        original_shape = full_rank_grad.shape
+        if len(original_shape) > 2:
+            full_rank_grad = full_rank_grad.view(original_shape[0], -1)  # Flatten to 2d
+        elif len(original_shape) == 1:
+            full_rank_grad = full_rank_grad.view(1, -1)  # Reshape 1d to 2d
+    
+        matrix = self.cast_ortho_matrix(full_rank_grad)
+        if full_rank_grad.shape[0] >= full_rank_grad.shape[1]:
+            projected_grad = torch.matmul(torch.matmul(full_rank_grad, matrix.t()), matrix)
+        else:
+            projected_grad = torch.matmul(matrix, torch.matmul(matrix.t(), full_rank_grad))
+
+        projected_grad = projected_grad.view(original_shape).mul_(self.scale)
+
+        return projected_grad.sub_(full_rank_grad).neg_()
+
+    @torch.no_grad()
+    def try_update_ortho_matrix(self, init_grad, iter, type):
+        if self.ortho_matrix is not None and iter % self.update_proj_gap != 0:
+            return
+        
+        self.ortho_matrix = self.get_orthogonal_matrix(init_grad, type=type)
+        
+        self.svd_count += 1
+        ortho_vector = self.ortho_matrix[:1, :].clone().flatten()
+        if self.past_ortho_vector is not None:
+            if len(self.queue) == self.queue_size: self.queue.pop(0)
+            self.queue.append(torch.nn.functional.cosine_similarity(self.past_ortho_vector, ortho_vector, dim=0).item())
+
+            if len(self.queue) == self.queue_size and sum(self.queue) / self.queue_size >= self.cos_threshold:
+                self.update_proj_gap = int(self.update_proj_gap * self.gamma_proj)
+        self.past_ortho_vector = ortho_vector
+
+    @torch.no_grad()
+    def project(self, full_rank_grad, iter, init_grad=None):
+        if init_grad is None:
+            init_grad = full_rank_grad
+
+        # Reshape Nd tensor to 2d
+        self._original_shape = full_rank_grad.shape
+        if len(self._original_shape) > 2:
+            full_rank_grad = full_rank_grad.view(self._original_shape[0], -1)  # Flatten to 2d
+        elif len(self._original_shape) == 1:
+            full_rank_grad = full_rank_grad.view(1, -1)  # Reshape 1d to 2d
+
+        if init_grad is not full_rank_grad:
+            init_grad = init_grad.view(full_rank_grad.shape)
+
+        if full_rank_grad.shape[0] >= full_rank_grad.shape[1]:
+            self.try_update_ortho_matrix(init_grad, iter, type='right')
+            low_rank_grad = torch.matmul(full_rank_grad, self.cast_ortho_matrix(full_rank_grad).t())
+        else:
+            self.try_update_ortho_matrix(init_grad, iter, type='left')
+            low_rank_grad = torch.matmul(self.cast_ortho_matrix(full_rank_grad).t(), full_rank_grad)
+            
+        return low_rank_grad
+
+    @torch.no_grad()
+    def project_back(self, low_rank_grad):
+        matrix = self.cast_ortho_matrix(low_rank_grad)
+        
+        if low_rank_grad.shape[0] >= low_rank_grad.shape[1]:
+            full_rank_grad = torch.matmul(low_rank_grad, matrix)
+        else:
+            full_rank_grad = torch.matmul(matrix, low_rank_grad)
+
+        full_rank_grad = full_rank_grad.view(self._original_shape) # Restore original dimensions from 2d tensor
+        return full_rank_grad.mul_(self.scale)
+
+    # svd decomposition
+    @torch.no_grad()
+    def get_orthogonal_matrix(self, weights, type):
+        U, _, Vh = torch.linalg.svd(weights.float(), full_matrices=False)
+
+        # Make the smaller matrix always to be orthogonal matrix
+        if type == 'left':
+            rank = int(weights.shape[0] / self.rank)
+            A = U[:, :rank]
+            return A.to(dtype=weights.dtype)
+        elif type == 'right':
+            # Treat user-specified rank as a divisor
+            rank = int(weights.shape[1] / self.rank)
+            B = Vh[:rank, :]
+            return B.to(dtype=weights.dtype)
+        else:
+            raise ValueError('type should be left, right or full')

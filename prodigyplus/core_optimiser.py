@@ -23,6 +23,7 @@ class CoreOptimiser(torch.optim.Optimizer):
                  use_grams=False,
                  use_adopt=False,
                  use_orthograd=False,
+                 galore_rank_denom=None,
                  stochastic_rounding=True):
 
         if not 0.0 < d0:
@@ -37,6 +38,8 @@ class CoreOptimiser(torch.optim.Optimizer):
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
         if beta3 is not None and not 0.0 <= beta3 < 1.0:
             raise ValueError("Invalid beta3 parameter: {}".format(beta3))
+        if galore_rank_denom is not None and galore_rank_denom <= 1:
+            raise ValueError("Invalid galore_rank_denom parameter: {}".format(galore_rank_denom))
 
         self.try_hook_kohya_fbp()
 
@@ -73,6 +76,7 @@ class CoreOptimiser(torch.optim.Optimizer):
                         use_grams=use_grams,
                         use_adopt=use_adopt,
                         use_orthograd=use_orthograd,
+                        galore_rank_denom=galore_rank_denom,
                         stochastic_rounding=stochastic_rounding)
 
         super().__init__(params, defaults)
