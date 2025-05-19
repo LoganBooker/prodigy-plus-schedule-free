@@ -383,6 +383,8 @@ class CoreOptimiser(torch.optim.Optimizer):
 
             # Update other group values unrelated to d.
             for group in self.param_groups:
+                if not group['use_schedulefree']:
+                    group['effective_lr'] = group['lr']
                 group['weight_sum'] = group.get('running_weight_sum', 0)
                 group['k'] += 1
 
