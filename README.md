@@ -16,6 +16,7 @@
 * Sufficied to say, you should not resume training started with older versions of the optimiser with this one. It will break.
 
 ## Installation
+For the current stable release (v1.9.2), use:
 ```
 pip install prodigy-plus-schedule-free
 ```
