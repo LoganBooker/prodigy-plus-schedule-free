@@ -19,11 +19,11 @@
 ```
 pip install prodigy-plus-schedule-free
 ```
-If you'd like to try the v2.0.0 beta, use the following instead:
+If you'd like to try the v2.0.0 release candidate, clone this repo or use the following instead:
 ```
-pip install prodigy-plus-schedule-free==2.0.0b5
+pip install prodigy-plus-schedule-free==2.0.0rc1
 ```
-Please note v2.0.0 **includes breaking changes**. Do not use it to resume training runs on older versions! For more details, [see the dev branch](https://github.com/LoganBooker/prodigy-plus-schedule-free/tree/dev).
+Please note v2.0.0 **includes breaking changes**. Do not use it to resume training runs on older versions! Please check the changelog above for more details.
 
 ## Usage
 ```python
