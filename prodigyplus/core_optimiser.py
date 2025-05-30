@@ -56,28 +56,27 @@ class CoreOptimiser(torch.optim.Optimizer):
         defaults['d_denom'] = defaults['d_numerator'] = 0
         defaults['prev_d_numerator'] = defaults['max_d_numerator'] = 0
         defaults['shared_d'] = None
-        defaults['is_global_group'] = False
         defaults['train_mode'] = True
         defaults['k'] = 1
 
         super().__init__(params, defaults)
-
-        global_group = self.get_global_group()
-
-        if global_group['split_groups'] and len(self.param_groups) == 1:
-            self.log(f"Optimiser contains single param_group -- 'split_groups' has been disabled.")
-            global_group['split_groups'] = False
 
         self.parameters_to_process = None
 
         self.print_dtype_warning = True
         self.print_version_check = True
 
+        split_groups = defaults['split_groups']
+        if split_groups and len(self.param_groups) == 1:
+            self.log(f"Optimiser contains single param_group -- 'split_groups' has been disabled.")
+            split_groups = False
+
         # Use tensors to keep everything on device during parameter loop.
-        for group in (self.param_groups if global_group['split_groups'] else [global_group]):
+        for group in (self.param_groups if split_groups else self.param_groups[:1]):
             p = group['params'][0]
             group['running_d_numerator'] = torch.tensor(0.0, dtype=torch.float32, device=p.device)
             group['running_d_denom'] = torch.tensor(0.0, dtype=torch.float32, device=p.device)
+            group['split_groups'] = split_groups
 
     @torch.no_grad()
     def eval(self):
@@ -86,15 +85,6 @@ class CoreOptimiser(torch.optim.Optimizer):
     @torch.no_grad()
     def train(self):
         pass
-
-    def get_global_group(self):
-        if getattr(self, '_global_group', None) is None:
-            self._global_group = next(
-                (g for g in self.param_groups if g.get('is_global_group', False)),
-                self.param_groups[0]
-            )
-            self._global_group['is_global_group'] = True
-        return self._global_group
 
     @property
     def supports_memory_efficient_fp16(self):
@@ -117,7 +107,7 @@ class CoreOptimiser(torch.optim.Optimizer):
     @torch.no_grad()
     def get_running_values_for_group(self, group):
         if not group['split_groups']:
-            group = self.get_global_group()
+            group = self.param_groups[0]
 
         p = group['params'][0]
         numerator, denom = group['running_d_numerator'], group['running_d_denom']
@@ -342,8 +332,8 @@ class CoreOptimiser(torch.optim.Optimizer):
 
             # Check if resuming training started on an older version.
             if getattr(self, "print_version_check", True):
-                global_group = self.get_global_group()
-                version = global_group.get('optimiser_version', None)
+                first_group = self.param_groups[0]
+                version = first_group.get('optimiser_version', None)
                 if version != self.VERSION:
                     expected, actual = '.'.join(map(str, self.VERSION)), '.'.join(map(str, version)) if version else '<= 1.9.2'
                     self.log(f"Optimiser version mismatch or missing: expected {expected}, got {actual}. Training resume is not supported between versions!")
@@ -353,10 +343,10 @@ class CoreOptimiser(torch.optim.Optimizer):
         self.parameters_to_process -= 1
 
         if self.parameters_to_process == 0:
-            global_group = self.get_global_group()
+            first_group = self.param_groups[0]
 
             # Update d for next optimiser step.
-            if global_group['split_groups']:
+            if first_group['split_groups']:
                 for i, group in enumerate(self.param_groups):
                     if group['prodigy_steps'] > 0 and group['k'] == group['prodigy_steps']:
                         self.log(f"Prodigy stepsize adaptation disabled after {group['k']} steps for param_group {i}.")
@@ -364,22 +354,22 @@ class CoreOptimiser(torch.optim.Optimizer):
                     self.update_d_stats_and_reset(group)
                     self.calculate_d(group)
 
-                if global_group['split_groups_mean']:
+                if first_group['split_groups_mean']:
                     d_mean = harmonic_mean(group['d'] for group in self.param_groups)
                     for group in self.param_groups:
                         group['shared_d'] = d_mean
             else:
                 # When groups aren't split, calculate d for the first group (which collects stats for all groups in non-split mode), 
                 # then copy to all other groups.
-                self.update_d_stats_and_reset(global_group)
-                self.calculate_d(global_group)
+                self.update_d_stats_and_reset(first_group)
+                self.calculate_d(first_group)
 
                 for i, group in enumerate(self.param_groups):
                     if group['prodigy_steps'] > 0 and group['k'] == group['prodigy_steps']:
                         self.log(f"Prodigy stepsize adaptation disabled after {group['k']} steps for param_group {i}.")
 
                     for key in ['d', 'd_prev', 'd_numerator', 'd_denom', 'prev_d_numerator', 'max_d_numerator']:
-                        group[key] = global_group[key]
+                        group[key] = first_group[key]
 
             # Update other group values unrelated to d.
             for group in self.param_groups:
@@ -591,9 +581,6 @@ class CoreOptimiser(torch.optim.Optimizer):
     def step(self, closure=None):
         self.try_unhook_kohya_fbp()
 
-        if self.get_global_group()['fused_back_pass']:
-            return
-
         """Performs a single optimisation step.
 
         Arguments:
@@ -607,6 +594,9 @@ class CoreOptimiser(torch.optim.Optimizer):
                 loss = closure()
 
         for param_group in self.param_groups:
+            if param_group['fused_back_pass']:
+                break
+
             for p in param_group["params"]:
                 self.step_param(p, param_group)
 
