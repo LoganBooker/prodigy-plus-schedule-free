@@ -53,7 +53,9 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
             (default: 0).
         weight_decay_by_lr (boolean):
             By default, weight decay is multiplied by the adaptive learning rate (as per the PyTorch implementation of AdamW). Disabling this 
-            feature will stop decay being multiplied by the LR. Its effect will be stronger and less sensitive to training dynamics.
+            feature will stop decay being multiplied by the LR. Please note this setting is completely different to Prodigy's "decouple" setting; 
+            this optimiser uses decoupled weight decay by default (equal to "decouple=True" for the reference implementation). Do not change this setting
+            unless you know what you're doing!
             (default: True)
         d0 (float):
             Initial estimate for Prodigy. Should not require adjustment, but can be increased to 1e-5 or 1e-4 if the optimiser struggles to converge.
