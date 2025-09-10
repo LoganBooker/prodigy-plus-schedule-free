@@ -37,6 +37,9 @@ optimizer = ProdigyPlusScheduleFree(model.parameters(), lr=1.0, betas=(0.9, 0.99
 > [!IMPORTANT]
 > As with the reference implementation of Schedule-Free, a constant scheduler should be used, along with the appropriate calls to `optimizer.train()` and `optimizer.eval()`. See the Schedule-Free documentation for more details: https://github.com/facebookresearch/schedule_free
 
+> [!TIP]
+> [Recent research suggests](https://arxiv.org/pdf/2507.09846) `betas=(0.95, 0.99)` works better in most situations for Schedule-Free. For now, the default remains `betas=(0.9, 0.99)`.
+
 ## TLDR
 The default settings should "just work", but there are a few configurations you can try to improve things.
 
