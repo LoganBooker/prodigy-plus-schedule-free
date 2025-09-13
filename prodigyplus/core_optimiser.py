@@ -307,15 +307,14 @@ class CoreOptimiser(torch.optim.Optimizer):
         if prodigy_steps > 0 and k >= prodigy_steps:
             return
 
-        d, d_prev, d_coef = group['d'], group['d_prev'], group['d_coef']
+        d, d_coef = group['d'], group['d_coef']
         d_numerator, d_denom = group['d_numerator'], group['d_denom']
         prev_d_numerator, max_d_numerator = group['prev_d_numerator'], group['max_d_numerator']
 
         if group['use_speed']:
             if d_numerator >= max_d_numerator and d_numerator > 0 and prev_d_numerator > 0:
-                d_power = 0.5 * (d_prev / d) ** 2
-                d_hat = min(2 ** d_power, (d_numerator / prev_d_numerator) ** 0.5)
-                d = max(d, d * d_hat)
+                d_hat = min(2 ** 0.25, (d_numerator / prev_d_numerator) ** 0.5)
+                d = max(d, d * d_hat * (group['d_coef'] ** 0.125))
         elif d_denom > 0:
             d_hat = d_numerator / d_denom
             if group['d_limiter']:
@@ -410,7 +409,6 @@ class CoreOptimiser(torch.optim.Optimizer):
                 state['max_x0_minus_l2_norm'] = x0_minus_l2_norm.item()
 
                 # Penalise d as displacement increases. This helps prevent pathologic d growth.
-                d_update = d_update ** (group['d_coef'] ** 0.125)
                 d_update /= x0_minus_l2_norm.add(1).square()
 
                 # d_denom is unused by SPEED, so use it instead for logging l2.
