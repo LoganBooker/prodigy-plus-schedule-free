@@ -16,15 +16,14 @@
 * Sufficied to say, you should not resume training started with older versions of the optimiser with this one. It will break.
 
 ## Installation
-For the current stable release (v1.9.2), use:
+For the most recent release:
 ```
 pip install prodigy-plus-schedule-free
 ```
-If you'd like to try the v2.0.0 release candidate, clone this repo or use the following instead:
+Please note v2.0.0 **includes breaking changes**. Do not use it to resume training runs on older versions! Please check the changelog above for more details. For the previous release (v1.9.2), use:
 ```
-pip install prodigy-plus-schedule-free==2.0.0rc2
+pip install prodigy-plus-schedule-free==1.9.2
 ```
-Please note v2.0.0 **includes breaking changes**. Do not use it to resume training runs on older versions! Please check the changelog above for more details.
 
 ## Usage
 ```python
