@@ -30,13 +30,13 @@ pip install prodigy-plus-schedule-free==1.9.2
 from prodigyplus.prodigy_plus_schedulefree import ProdigyPlusScheduleFree
 optimizer = ProdigyPlusScheduleFree(model.parameters(), lr=1.0, betas=(0.9, 0.99), beta3=None, 
                  					weight_decay=0.0, weight_decay_by_lr=True, d0=1e-6, d_coef=1.0,
-							d_limiter=True,	prodigy_steps=0, eps=1e-8, 
-							split_groups=True, split_groups_mean=False,
+							        d_limiter=True, prodigy_steps=0, eps=1e-8,
+									split_groups=True, split_groups_mean=False,
                  					factored=True, factored_fp32=True, use_bias_correction=False,
                  					use_stableadamw=True, use_schedulefree=True, use_speed=False,
                  					stochastic_rounding=True, fused_back_pass=False,
                  					use_cautious=False, use_grams=False, use_adopt=False,
-							use_orthograd=False, use_focus=False)
+									use_orthograd=False, use_focus=False)
 ```
 
 > [!IMPORTANT]
