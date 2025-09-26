@@ -177,8 +177,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                  use_grams=False,
                  use_adopt=False,
                  use_orthograd=False,
-                 use_focus=False,
-                 **kwargs):
+                 use_focus=False):
 
         super().__init__(params=params, lr=lr,
                         betas=betas, beta3=beta3,
@@ -202,8 +201,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                         use_grams=use_grams,
                         use_adopt=use_adopt,
                         use_orthograd=use_orthograd,
-                        use_focus=use_focus,
-                        **kwargs)
+                        use_focus=use_focus)
 
     @torch.no_grad()
     def set_train_mode(self, train):
