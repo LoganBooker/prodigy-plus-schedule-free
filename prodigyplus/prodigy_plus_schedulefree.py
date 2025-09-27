@@ -252,7 +252,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
         # "Through the River: Understanding the Benefit of Schedule-Free Methods": https://arxiv.org/pdf/2507.09846
         # Original SF averaging strength follows the calculation 1.0 / (1 - beta1). For beta1 = 0.9, this works out
         # to schedulefree_c = 10, 0.95 = 20, and so on.
-        schedulefree_c = group['schedulefree_c']
+        schedulefree_c = group.get('schedulefree_c', 0)
         if schedulefree_c > 0:
             ckp1 = min(1.0, ckp1 * (1 - beta1) * schedulefree_c)
 
