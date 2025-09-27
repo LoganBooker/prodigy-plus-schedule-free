@@ -73,6 +73,12 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
             If greater than zero, disable Prodigy's stepsize adjustments after the specified optimiser step and release all state memory 
             required by Prodigy.
             (default: 0)
+        schedulefree_c (float):
+            Schedule-Free averaging strength from Refined SF-Adam: https://arxiv.org/pdf/2507.09846.
+            Larger values = more responsive (shorter averaging window); smaller values = smoother (longer window).
+            Set to 0 to disable and use the original Schedule-Free rule (no extra scaling). Short, noisy runs with small batches typically 
+            benefit from modest values (≈6-12); long/large-batch runs can use larger values (≈50-200).
+            (default: 0.0)
         eps (float):
             Term added to the denominator outside of the root operation to improve numerical stability. If set to None,
             Adam-atan2 is used instead. This removes the need for epsilon tuning, but may not work well in all situations.
@@ -162,6 +168,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                  d0=1e-6, d_coef=1.0,
                  d_limiter=True,
                  prodigy_steps=0,
+                 schedulefree_c=0,
                  eps=1e-8,
                  split_groups=True,
                  split_groups_mean=False,
@@ -186,6 +193,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                         d0=d0, d_coef=d_coef,
                         d_limiter=d_limiter,
                         prodigy_steps=prodigy_steps,
+                        schedulefree_c=schedulefree_c,
                         eps=eps,
                         split_groups=split_groups,
                         split_groups_mean=split_groups_mean,
@@ -240,6 +248,13 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
         weight = dlr ** 2
         weight_sum = group['running_weight_sum'] = group.get('weight_sum', 0) + weight
         ckp1 = weight / weight_sum if weight_sum else 0
+
+        # "Through the River: Understanding the Benefit of Schedule-Free Methods": https://arxiv.org/pdf/2507.09846
+        # Original SF averaging strength follows the calculation 1.0 / (1 - beta1). For beta1 = 0.9, this works out
+        # to schedulefree_c = 10, 0.95 = 20, and so on.
+        schedulefree_c = group['schedulefree_c']
+        if schedulefree_c > 0:
+            ckp1 = min(1.0, ckp1 * (1 - beta1) * schedulefree_c)
 
         xy_step = 1 - beta1 * (1 - ckp1)
         group['effective_lr'] = group['lr'] * xy_step
