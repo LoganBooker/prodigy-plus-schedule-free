@@ -468,8 +468,8 @@ class CoreOptimiser(torch.optim.Optimizer):
             row_var, col_var = state["exp_avg_sq_row"], state["exp_avg_sq_col"]
             dr, dc = state["exp_avg_sq_metadata"]
 
-            reduce_dc = dc - 1 if dc > dr else dc
-            row_col_mean = row_var.mean(dim=reduce_dc, keepdim=True).add_(1e-30)
+            # The factors retain both axes, so dc still indexes the original axis.
+            row_col_mean = row_var.mean(dim=dc, keepdim=True).add_(1e-30)
             denom = (row_var.div(row_col_mean) * col_var).sqrt_()
         else:
             denom = state['exp_avg_sq'].sqrt()
